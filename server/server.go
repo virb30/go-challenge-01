@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,8 +11,6 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 )
 
 type CotacaoDto struct {
@@ -20,7 +19,7 @@ type CotacaoDto struct {
 	} `json:"USDBRL"`
 }
 
-type Quotation struct {
+type Cotacao struct {
 	ID    int `gorm:"primaryKey"`
 	Valor string
 }
@@ -32,17 +31,23 @@ func main() {
 
 func handler(w http.ResponseWriter, r *http.Request) {
 	dsn := "database.sqlite3"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	db.AutoMigrate(&Quotation{})
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+	}
+	err = migrate(db)
+	if err != nil {
+		log.Println(err)
 	}
 	c, err := getCotacao()
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
-	cotacao := Quotation{Valor: c.Usdbrl.Valor}
-	insertCotacao(db, &cotacao)
+	cotacao := Cotacao{Valor: c.Usdbrl.Valor}
+	err = insertCotacao(db, cotacao)
+	if err != nil {
+		log.Println(err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(fmt.Sprintf(`{"valor": %s}`, c.Usdbrl.Valor)))
 }
@@ -71,8 +76,25 @@ func getCotacao() (*CotacaoDto, error) {
 	return &c, nil
 }
 
-func insertCotacao(db *gorm.DB, c *Quotation) {
+func insertCotacao(db *sql.DB, c Cotacao) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(10*time.Millisecond))
 	defer cancel()
-	db.WithContext(ctx).Create(&c)
+	stmt, err := db.PrepareContext(ctx, "INSERT INTO cotacoes (valor) values (?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	_, err = stmt.ExecContext(ctx, c.Valor)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func migrate(db *sql.DB) error {
+	_, err := db.Exec("CREATE TABLE IF NOT EXISTS cotacoes (id integer primary key autoincrement, valor varchar)")
+	if err != nil {
+		return err
+	}
+	return nil
 }
